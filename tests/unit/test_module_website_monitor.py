@@ -1,20 +1,14 @@
-# tests/unit/test_module_website_monitor.py
-"""
-Unit tests for the email notification functionalities of the WebsiteMonitor class.
+"""Unit tests for the email notification functionalities of the WebsiteMonitor class."""
 
-Focuses on testing email notification logic in isolation by mocking
-external services and controlling configuration.
-"""
+import smtplib
+import socket
+from unittest.mock import ANY, MagicMock
 
 import pytest
-from unittest.mock import MagicMock, call, ANY  # ANY is useful for some arguments
-import smtplib  # For exception types
-import socket  # For socket.gaierror
 
-from scraper import website_monitor  # The module containing WebsiteMonitor
+from scraper import website_monitor
 
 
-# Helper to create a WebsiteMonitor instance for tests
 @pytest.fixture
 def monitor_instance(mocker) -> website_monitor.WebsiteMonitor:
     """Provides a WebsiteMonitor instance with its session creation mocked."""
@@ -22,11 +16,8 @@ def monitor_instance(mocker) -> website_monitor.WebsiteMonitor:
     return website_monitor.WebsiteMonitor()
 
 
-# --- Email Notification Tests ---
-
-
 @pytest.mark.parametrize(
-    "smtp_port, use_tls, expect_smtp_ssl",
+    ("smtp_port", " use_tls", "expect_smtp_ssl"),
     [
         (587, True, False),  # Standard TLS port
         (25, True, False),  # Another port, TLS explicitly enabled
@@ -79,7 +70,7 @@ def test_send_email_notification_success(
     mock_smtp_instance.sendmail.assert_called_once_with("sender@example.com", recipients, ANY)
     sent_message_str = mock_smtp_instance.sendmail.call_args[0][2]
     assert f"Subject: {subject}" in sent_message_str
-    assert f"From: sender@example.com" in sent_message_str
+    assert "From: sender@example.com" in sent_message_str
     assert f"To: {', '.join(recipients)}" in sent_message_str
     assert body in sent_message_str
 
@@ -91,7 +82,7 @@ def test_send_email_notification_misconfigured(mocker, monitor_instance: website
     mock_logger = mocker.patch("scraper.website_monitor.logger")
     mock_smtp_class = mocker.patch("scraper.website_monitor.smtplib.SMTP")
 
-    mocker.patch("scraper.website_monitor.SMTP_HOST", None)  # Simulate missing SMTP_HOST
+    mocker.patch("scraper.website_monitor.SMTP_HOST", None)
     mocker.patch("scraper.website_monitor.SMTP_USER", "user@example.com")
     mocker.patch("scraper.website_monitor.SMTP_PASSWORD", "password123")
     mocker.patch("scraper.website_monitor.EMAIL_SENDER", "sender@example.com")
@@ -103,7 +94,7 @@ def test_send_email_notification_misconfigured(mocker, monitor_instance: website
 
 
 @pytest.mark.parametrize(
-    "exception_instance, error_message_part",
+    ("exception_instance", "error_message_part"),
     [
         (smtplib.SMTPAuthenticationError(535, b"Authentication credentials invalid"), "SMTP authentication failed"),
         (smtplib.SMTPServerDisconnected("Server disconnected unexpectedly"), "SMTP server disconnected unexpectedly."),
@@ -148,9 +139,6 @@ def test_send_email_notification_smtp_exceptions(
     )
 
 
-# --- _notify_content_change Orchestration Tests (Email Only) ---
-
-
 def test_notify_content_change_email_enabled_and_configured(mocker, monitor_instance: website_monitor.WebsiteMonitor):
     """
     Tests that _notify_content_change calls email method when enabled and configured.
@@ -184,8 +172,8 @@ def test_notify_content_change_email_disabled(mocker, monitor_instance: website_
     """Tests that email is not sent if email notifications are disabled."""
     mock_send_email = mocker.patch.object(monitor_instance, "_send_email_notification")
 
-    mocker.patch("scraper.website_monitor.EMAIL_NOTIFICATIONS_ENABLED", False)  # Email disabled
-    mocker.patch("scraper.website_monitor.EMAIL_RECIPIENTS", ["test@example.com"])  # Still provide recipients
+    mocker.patch("scraper.website_monitor.EMAIL_NOTIFICATIONS_ENABLED", False)
+    mocker.patch("scraper.website_monitor.EMAIL_RECIPIENTS", ["test@example.com"])
 
     monitor_instance._notify_content_change("new", "old")
 
@@ -198,9 +186,7 @@ def test_notify_content_change_email_enabled_no_recipients(mocker, monitor_insta
     mock_send_email = mocker.patch.object(monitor_instance, "_send_email_notification")
 
     mocker.patch("scraper.website_monitor.EMAIL_NOTIFICATIONS_ENABLED", True)
-    mocker.patch("scraper.website_monitor.EMAIL_RECIPIENTS", [])  # No email recipients
-    # Provide minimal SMTP config so the internal check in _send_email_notification doesn't cause a skip
-    # by _notify_content_change's own logic.
+    mocker.patch("scraper.website_monitor.EMAIL_RECIPIENTS", [])
     mocker.patch("scraper.website_monitor.SMTP_HOST", "smtp.example.com")
     mocker.patch("scraper.website_monitor.SMTP_USER", "user")
     mocker.patch("scraper.website_monitor.SMTP_PASSWORD", "pass")
@@ -208,7 +194,5 @@ def test_notify_content_change_email_enabled_no_recipients(mocker, monitor_insta
 
     monitor_instance._notify_content_change("new", "old")
 
-    # _send_email_notification should not be called by _notify_content_change
-    # because _notify_content_change itself checks for EMAIL_RECIPIENTS.
     mock_send_email.assert_not_called()
     mock_logger.warning.assert_any_call("Email notifications enabled but no recipients configured.")
