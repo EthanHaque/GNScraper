@@ -1,339 +1,412 @@
-# src/scraper/website_monitor.py
-# (Assuming other imports and constants are already defined as in your provided script)
+# tests/unit/test_website_monitor_core.py
+"""
+Unit tests for the core functionalities of the WebsiteMonitor class.
 
-# ... (other imports and constants like URL, TARGET_ELEMENT_ID, etc.)
-# ... (logging_config setup and logger definition)
+This suite tests session creation, content fetching, parsing, hashing,
+scheduling logic, and the main change detection workflow, excluding
+direct tests of notification sending mechanisms (which are in a separate file).
+"""
+
+import datetime
+import hashlib
+from unittest.mock import MagicMock, Mock, ANY
+
+import pytest
+import requests  # For requests.exceptions and using the original Session for spec
+import schedule  # For schedule.clear()
+
+# Import the module from your package
+from scraper import website_monitor
 
 
-class WebsiteMonitor:
+@pytest.fixture(autouse=True)
+def clear_schedule_before_each_test():
+    """Ensures the schedule is clear before and after each test."""
+    schedule.clear()
+    yield
+    schedule.clear()
+
+
+@pytest.fixture
+def mock_session(mocker):
+    """Fixture to provide a mocked requests.Session instance."""
+    session = Mock(spec=requests.Session)  # Use original requests.Session for spec
+    session.headers = {}  # Mock the headers attribute as it's updated
+    session.mount = Mock()
+    return session
+
+
+@pytest.fixture
+def monitor_instance(mocker, mock_session) -> website_monitor.WebsiteMonitor:
     """
-    Manages the process of monitoring a website for content changes.
-
-    Encapsulates the state and logic for fetching, parsing, hashing,
-    scheduling, and notifying of changes to a specific part of a webpage.
-
-    Attributes
-    ----------
-    previous_content_hash : Optional[str]
-        Hash of the target element's content from the previous check.
-    current_job : Optional[Any]
-        The currently active `schedule` job instance.
-    current_schedule_type : Optional[str]
-        Indicates the current active schedule type ('peak' or 'offpeak').
-    session : requests.Session
-        The requests session with retry capabilities, reused for checks.
+    Provides a WebsiteMonitor instance with its _create_session_with_retries
+    method patched to return a predefined mock session.
+    This means monitor.session will be the mock_session.
     """
-
-    def __init__(self) -> None:
-        """Initialize the WebsiteMonitor state."""
-        self.previous_content_hash: str | None = None
-        self.current_job: Any | None = None
-        self.current_schedule_type: str | None = None
-        self.session: requests.Session = self._create_session_with_retries()
-        logger.debug("WebsiteMonitor instance initialized.")
-
-    @staticmethod
-    def _create_session_with_retries() -> requests.Session:
-        """
-        Create and configure a requests Session with retry capabilities.
-
-        Returns
-        -------
-        requests.Session
-            A configured requests Session object.
-        """
-        session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS"],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
-        session.headers.update({"User-Agent": USER_AGENT})
-        logger.debug("Requests session created with retry strategy.")
-        return session
-
-    def _fetch_content(self, url: str) -> str | None:
-        """
-        Fetch HTML content from the specified URL using the instance's session.
-
-        Parameters
-        ----------
-        url : str
-            The URL from which to fetch the content.
-
-        Returns
-        -------
-        Optional[str]
-            The HTML content as a string if the request is successful,
-            otherwise None.
-        """
-        try:
-            response = self.session.get(url, timeout=REQUEST_TIMEOUT)
-            response.raise_for_status()
-            logger.debug("Successfully fetched content.", page_url=url, status_code=response.status_code)
-            return response.text
-        except requests.exceptions.RequestException as e:
-            logger.error("Failed to fetch URL content.", page_url=url, error_message=str(e), exc_info=False)
-            return None
-
-    @staticmethod
-    def _extract_target_content(html_content: str | None, element_id: str) -> str | None:
-        """
-        Extract the combined string representation of all target HTML elements.
-
-        If multiple elements share the same ID, their string representations
-        are concatenated. This allows detection of changes if any of these
-        elements change or if the number of such elements changes.
-
-        Parameters
-        ----------
-        html_content : Optional[str]
-            The HTML content of the page as a string.
-        element_id : str
-            The ID of the HTML elements to extract.
-
-        Returns
-        -------
-        Optional[str]
-            The combined string representation of all found target elements,
-            separated by newlines. Returns None if no elements are found or
-            if html_content is None.
-        """
-        if not html_content:
-            logger.debug("HTML content is None, cannot extract target content.")
-            return None
-        try:
-            soup = BeautifulSoup(html_content, "html.parser")
-            # MODIFIED: Use find_all to get all elements with the given ID
-            target_elements = soup.find_all(id=element_id)
-
-            if target_elements:
-                logger.debug(
-                    f"{len(target_elements)} target element(s) found.", target_id=element_id, count=len(target_elements)
-                )
-                # Concatenate the string representation of all found elements
-                # Using a newline separator for clarity if one were to inspect the combined string,
-                # though for hashing, any consistent concatenation works.
-                return "\n".join(str(element) for element in target_elements)
-
-            logger.warning(
-                "Target element not found in HTML content.",
-                target_id=element_id,
-                page_url=URL,  # URL is a module-level constant
-            )
-            return None
-        except Exception as e:
-            logger.error(
-                "Failed to parse HTML or extract element(s).", target_id=element_id, error_message=str(e), exc_info=True
-            )
-            return None
-
-    @staticmethod
-    def _calculate_hash(content: str | None) -> str:
-        """
-        Calculate the SHA256 hash of the given string content.
-
-        Parameters
-        ----------
-        content : Optional[str]
-            The string content to hash.
-
-        Returns
-        -------
-        str
-            The hexadecimal SHA256 hash of the content, or a placeholder string
-            if content is None.
-        """
-        if content is None:
-            return "element_not_found_or_empty"
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-    def _send_email_notification(self, subject: str, body: str, recipients: list[str]) -> None:
-        """
-        Send an email notification.
-        (Implementation as provided by user)
-        """
-        if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD, EMAIL_SENDER, recipients]):
-            logger.warning(
-                "Email notification misconfigured. Skipping email.",
-                details="SMTP_HOST, SMTP_USER, SMTP_PASSWORD, EMAIL_SENDER, or EMAIL_RECIPIENTS not set.",
-            )
-            return
-
-        msg = MIMEText(body)
-        msg["Subject"] = subject
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = ", ".join(recipients)
-
-        try:
-            logger.info("Attempting to send email notification...", to=recipients, subject=subject)
-            if SMTP_PORT == 465 and not SMTP_USE_TLS:
-                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                    server.login(SMTP_USER, SMTP_PASSWORD)
-                    server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
-            else:
-                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-                    if SMTP_USE_TLS:
-                        server.starttls()
-                    server.login(SMTP_USER, SMTP_PASSWORD)
-                    server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
-            logger.info("Email notification sent successfully.", to=recipients)
-        except smtplib.SMTPAuthenticationError as e:
-            logger.error("SMTP authentication failed. Check SMTP_USER/SMTP_PASSWORD.", error=str(e), exc_info=False)
-        except smtplib.SMTPServerDisconnected:
-            logger.error("SMTP server disconnected unexpectedly.", exc_info=True)
-        except smtplib.SMTPException as e:
-            logger.error("Failed to send email notification due to SMTP error.", error=str(e), exc_info=True)
-        except Exception as e:  # Catch other potential errors like socket.gaierror
-            logger.error("An unexpected error occurred while sending email.", error=str(e), exc_info=True)
-
-    def _notify_content_change(self, new_hash: str, old_hash: str | None) -> None:
-        """
-        Log and send notifications that the monitored content has changed.
-
-        Parameters
-        ----------
-        new_hash : str
-            The new hash of the content.
-        old_hash : Optional[str]
-            The previous hash of the content.
-        """
-        log_message = "CHANGE DETECTED: Monitored content has updated."
-        details = {
-            "previous_hash": old_hash if old_hash else "N/A (was not found or initial)",
-            "new_hash": new_hash,
-            "page_url": URL,
-            "element_id": TARGET_ELEMENT_ID,
-        }
-        logger.info(log_message, **details)
-
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
-        subject = f"Change Detected on {URL}"
-        body = (
-            f"Alert: Content change detected on page.\n\n"
-            f"URL: {URL}\n"
-            f"Target Element ID: {TARGET_ELEMENT_ID}\n"
-            f"Time of Detection: {timestamp}\n\n"
-            f"Previous Hash: {details['previous_hash']}\n"
-            f"New Hash: {new_hash}\n\n"
-            f"Please check the page for updates."
-        )
-
-        if EMAIL_NOTIFICATIONS_ENABLED:
-            if EMAIL_RECIPIENTS:
-                self._send_email_notification(subject, body, EMAIL_RECIPIENTS)
-            else:
-                logger.warning("Email notifications enabled but no recipients configured.")
-
-    def check_website_for_changes(self) -> None:
-        """
-        Perform a single check of the website for content changes.
-        """
-        logger.info("Checking website for content changes...", page_url=URL, target_id=TARGET_ELEMENT_ID)
-        html = self._fetch_content(URL)
-        current_content_str = self._extract_target_content(html, TARGET_ELEMENT_ID)
-        current_hash = self._calculate_hash(current_content_str)
-
-        if self.previous_content_hash is None:
-            logger.info(
-                "Initial content check complete or content re-established.",
-                current_hash=current_hash,
-                target_id=TARGET_ELEMENT_ID,
-            )
-            self.previous_content_hash = current_hash
-        elif current_hash != self.previous_content_hash:
-            self._notify_content_change(new_hash=current_hash, old_hash=self.previous_content_hash)
-            self.previous_content_hash = current_hash
-        else:
-            logger.info("No change detected in content.", current_hash=current_hash)
-
-    @staticmethod
-    def _get_current_schedule_type() -> str:
-        """
-        Determine if the current local time falls within peak or off-peak hours.
-        """
-        now_local_time = datetime.datetime.now().time()
-        peak_start = datetime.time(PEAK_START_HOUR, 0)
-        peak_end = datetime.time(PEAK_END_HOUR, 0)
-
-        if peak_start <= now_local_time < peak_end:
-            return "peak"
-        return "offpeak"
-
-    def manage_website_check_schedule(self) -> None:
-        """
-        Adjust the website checking schedule based on current time.
-        """
-        required_type = self._get_current_schedule_type()
-
-        if self.current_job is None or required_type != self.current_schedule_type:
-            if self.current_job:
-                schedule.cancel_job(self.current_job)
-                logger.info("Cancelled previous check schedule.", cancelled_schedule_type=self.current_schedule_type)
-
-            job_details: dict[str, Any] = {"type": required_type}
-
-            if required_type == "peak":
-                min_int, max_int = PEAK_INTERVAL_MIN, PEAK_INTERVAL_MAX
-                job_details["min_interval_sec"] = min_int
-                job_details["max_interval_sec"] = max_int
-                self.current_job = schedule.every(min_int).to(max_int).seconds.do(self.check_website_for_changes)
-            else:  # offpeak
-                min_int, max_int = OFFPEAK_INTERVAL_MIN, OFFPEAK_INTERVAL_MAX
-                job_details["min_interval_sec"] = min_int
-                job_details["max_interval_sec"] = max_int
-                self.current_job = schedule.every(min_int).to(max_int).seconds.do(self.check_website_for_changes)
-
-            logger.info("Scheduled new website check job.", **job_details)
-            self.current_schedule_type = required_type
-
-            if self.previous_content_hash is None:
-                logger.info(
-                    "Performing initial website check immediately after (re)scheduling as no baseline hash exists."
-                )
-                self.check_website_for_changes()
-
-    def run(self) -> None:
-        """
-        Start and run the website monitoring process.
-        """
-        logger.info(
-            "Starting Gamers Nexus Garage Sale Monitor.",
-            version="1.1.1-multi-element",  # Example version update
-            pid=os.getpid(),
-            monitoring_url=URL,
-            target_element=TARGET_ELEMENT_ID,
-        )
-
-        self.manage_website_check_schedule()
-        schedule.every(1).minute.do(self.manage_website_check_schedule)
-
-        try:
-            while True:
-                schedule.run_pending()
-                time.sleep(1)
-        except KeyboardInterrupt:
-            logger.info("Script terminated by user (KeyboardInterrupt).")
-        except Exception as e:
-            logger.error(
-                "An unexpected critical error occurred in the main monitoring loop.",
-                error_message=str(e),
-                exc_info=True,
-            )
-        finally:
-            logger.info("Stopping Gamers Nexus Garage Sale Monitor.")
+    # Patch the static method on the class
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._create_session_with_retries", return_value=mock_session)
+    monitor = website_monitor.WebsiteMonitor()
+    return monitor
 
 
-# ... (main function and if __name__ == "__main__": block remain the same)
-def main() -> None:
-    """Entry point for the script. Creates a WebsiteMonitor instance and runs it."""
-    monitor = WebsiteMonitor()
-    monitor.run()
+# --- Tests for Static/Helper Methods ---
 
 
-if __name__ == "__main__":
-    main()
+def test_create_session_with_retries(mocker):
+    """Test the static _create_session_with_retries method."""
+    # Patch external dependencies used by _create_session_with_retries
+    # This mock_requests_session_cls is what website_monitor._create_session_with_retries will see and use
+    mock_requests_session_cls_in_module = mocker.patch("scraper.website_monitor.requests.Session")
+    mock_http_adapter_cls = mocker.patch("scraper.website_monitor.HTTPAdapter")
+    mock_retry_cls = mocker.patch("scraper.website_monitor.Retry")
+
+    # This mock_session_instance is the one we expect _create_session_with_retries to return
+    # after it calls the (mocked) scraper.website_monitor.requests.Session()
+    expected_returned_session_instance = Mock(spec=requests.sessions.Session)  # Use original requests.Session for spec
+    expected_returned_session_instance.headers = Mock()  # Ensure headers attribute exists
+    mock_requests_session_cls_in_module.return_value = expected_returned_session_instance
+
+    # Call the method under test
+    actual_session = website_monitor.WebsiteMonitor._create_session_with_retries()
+
+    assert actual_session == expected_returned_session_instance
+    mock_requests_session_cls_in_module.assert_called_once()  # Check that the patched Session constructor was called
+    mock_retry_cls.assert_called_once_with(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
+    )
+    mock_http_adapter_cls.assert_called_once_with(max_retries=mock_retry_cls.return_value)
+    # Assert calls on the session instance that was returned by the mocked Session constructor
+    expected_returned_session_instance.mount.assert_any_call("http://", mock_http_adapter_cls.return_value)
+    expected_returned_session_instance.mount.assert_any_call("https://", mock_http_adapter_cls.return_value)
+    expected_returned_session_instance.headers.update.assert_called_once_with(
+        {"User-Agent": website_monitor.USER_AGENT}
+    )
+
+
+def test_extract_target_content_found(mocker):
+    """Tests _extract_target_content when the element is found."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    html = (
+        f"<html><body><div id='{website_monitor.TARGET_ELEMENT_ID}'>Expected Text <p>More</p></div>Extra</body></html>"
+    )
+    expected_str = f'<div id="{website_monitor.TARGET_ELEMENT_ID}">Expected Text <p>More</p></div>'
+
+    # Call as a static method
+    content = website_monitor.WebsiteMonitor._extract_target_content(html, website_monitor.TARGET_ELEMENT_ID)
+
+    assert content == expected_str
+    mock_logger.debug.assert_any_call("Target element found.", target_id=website_monitor.TARGET_ELEMENT_ID)
+
+
+def test_extract_target_content_not_found(mocker):
+    """Tests _extract_target_content when the element is not found."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    html = "<html><body><div>Nothing here</div></body></html>"
+
+    content = website_monitor.WebsiteMonitor._extract_target_content(html, website_monitor.TARGET_ELEMENT_ID)
+
+    assert content is None
+    mock_logger.warning.assert_called_once_with(
+        "Target element not found in HTML content.",
+        target_id=website_monitor.TARGET_ELEMENT_ID,
+        page_url=website_monitor.URL,  # URL is a module constant
+    )
+
+
+def test_extract_target_content_empty_or_invalid_html(mocker):
+    """Tests _extract_target_content with None or malformed HTML."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+
+    # Test 1: None input
+    assert website_monitor.WebsiteMonitor._extract_target_content(None, website_monitor.TARGET_ELEMENT_ID) is None
+    mock_logger.debug.assert_any_call("HTML content is None, cannot extract target content.")
+    mock_logger.warning.assert_not_called()  # No warning for None input
+    mock_logger.error.assert_not_called()  # No error for None input
+    mock_logger.reset_mock()  # Reset for the next part of the test
+
+    # Test 2: Malformed HTML (BeautifulSoup is lenient, might lead to "not found")
+    malformed_html = "<html><body><div id='productList'"  # Incomplete attribute
+    content = website_monitor.WebsiteMonitor._extract_target_content(malformed_html, website_monitor.TARGET_ELEMENT_ID)
+    assert content is None
+    # Expect a warning because the element (due to malformed ID) won't be found
+    mock_logger.warning.assert_called_once_with(
+        "Target element not found in HTML content.",
+        target_id=website_monitor.TARGET_ELEMENT_ID,
+        page_url=website_monitor.URL,
+    )
+    mock_logger.error.assert_not_called()  # BeautifulSoup usually doesn't error on this
+
+
+def test_calculate_hash():
+    """Tests the static _calculate_hash method."""
+    content1 = "Hello World"
+    hash1 = website_monitor.WebsiteMonitor._calculate_hash(content1)
+
+    assert hash1 == hashlib.sha256(content1.encode("utf-8")).hexdigest()
+    assert website_monitor.WebsiteMonitor._calculate_hash(content1) == hash1  # Consistency
+    assert website_monitor.WebsiteMonitor._calculate_hash("Other Content") != hash1
+    assert website_monitor.WebsiteMonitor._calculate_hash(None) == "element_not_found_or_empty"
+
+
+@pytest.mark.parametrize(
+    "current_time_tuple, expected_type",
+    [
+        ((10, 0, 0), "peak"),
+        ((3, 0, 0), "offpeak"),
+        ((22, 0, 0), "offpeak"),
+        ((website_monitor.PEAK_START_HOUR, 0, 0), "peak"),
+        ((website_monitor.PEAK_END_HOUR, 0, 0), "offpeak"),  # At 21:00, it's off-peak
+        ((website_monitor.PEAK_END_HOUR - 1, 59, 59), "peak"),  # Just before off-peak
+    ],
+)
+def test_get_current_schedule_type_parametrized(mocker, current_time_tuple, expected_type):
+    """Tests the static _get_current_schedule_type method with various times."""
+    # Patch datetime.datetime where it's used inside scraper.website_monitor
+    mock_dt_datetime = mocker.patch("scraper.website_monitor.datetime.datetime")
+    mock_dt_datetime.now.return_value.time.return_value = datetime.time(*current_time_tuple)
+
+    assert website_monitor.WebsiteMonitor._get_current_schedule_type() == expected_type
+
+
+# --- Tests for Instance Methods (using monitor_instance fixture) ---
+
+
+def test_fetch_content_success_on_instance(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests _fetch_content success using a monitor instance."""
+    # monitor_instance.session is already the mock_session from the fixture
+    mock_logger = mocker.patch("scraper.website_monitor.logger")  # Module logger
+
+    mock_response = Mock(spec=requests.Response)  # Use spec for better response mocking
+    mock_response.text = "<html>Test Content</html>"
+    mock_response.status_code = 200  # Needed for raise_for_status
+    mock_response.raise_for_status = Mock()  # Mock this method
+
+    monitor_instance.session.get.return_value = mock_response
+
+    html = monitor_instance._fetch_content(website_monitor.URL)
+
+    assert html == "<html>Test Content</html>"
+    monitor_instance.session.get.assert_called_once_with(website_monitor.URL, timeout=website_monitor.REQUEST_TIMEOUT)
+    mock_response.raise_for_status.assert_called_once()
+    mock_logger.error.assert_not_called()
+
+
+def test_fetch_content_http_error_on_instance(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests _fetch_content with an HTTP error using a monitor instance."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+
+    http_error_instance = requests.exceptions.HTTPError("Test HTTP Error")
+
+    # Configure the mock response to raise an error when raise_for_status is called
+    mock_response = Mock(spec=requests.Response)
+    mock_response.raise_for_status.side_effect = http_error_instance
+    monitor_instance.session.get.return_value = mock_response
+
+    html = monitor_instance._fetch_content(website_monitor.URL)
+    assert html is None
+    mock_logger.error.assert_called_once_with(
+        "Failed to fetch URL content.",
+        page_url=website_monitor.URL,
+        error_message=str(http_error_instance),  # Error message comes from the exception
+        exc_info=False,
+    )
+
+
+def test_check_website_initial_run(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests the first run of check_website_for_changes."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+
+    # Mock helper methods called by check_website_for_changes
+    mocker.patch.object(monitor_instance, "_fetch_content", return_value="dummy_html_content")
+    # _extract_target_content and _calculate_hash are static, so patch them on the class
+    mocker.patch(
+        "scraper.website_monitor.WebsiteMonitor._extract_target_content", return_value="dummy_extracted_content"
+    )
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._calculate_hash", return_value="new_hash_123")
+
+    assert monitor_instance.previous_content_hash is None  # Initial state
+    monitor_instance.check_website_for_changes()
+
+    monitor_instance._fetch_content.assert_called_once_with(website_monitor.URL)
+    website_monitor.WebsiteMonitor._extract_target_content.assert_called_once_with(
+        "dummy_html_content", website_monitor.TARGET_ELEMENT_ID
+    )
+    website_monitor.WebsiteMonitor._calculate_hash.assert_called_once_with("dummy_extracted_content")
+
+    mock_logger.info.assert_any_call(
+        "Initial content check complete or content re-established.",
+        current_hash="new_hash_123",
+        target_id=website_monitor.TARGET_ELEMENT_ID,
+    )
+    assert monitor_instance.previous_content_hash == "new_hash_123"
+
+
+def test_check_website_change_detected(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests change detection in check_website_for_changes."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    # Mock the notification method to prevent actual notifications and allow assertion
+    mock_notify_method = mocker.patch.object(monitor_instance, "_notify_content_change")
+
+    monitor_instance.previous_content_hash = "old_hash_000"  # Set prior state
+
+    mocker.patch.object(monitor_instance, "_fetch_content", return_value="new_html")
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._extract_target_content", return_value="new_content")
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._calculate_hash", return_value="new_hash_456")
+
+    monitor_instance.check_website_for_changes()
+
+    # _notify_content_change should have been called
+    mock_notify_method.assert_called_once_with(new_hash="new_hash_456", old_hash="old_hash_000")
+    assert monitor_instance.previous_content_hash == "new_hash_456"
+
+
+def test_check_website_no_change(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests behavior of check_website_for_changes when no change occurs."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    mock_notify_method = mocker.patch.object(monitor_instance, "_notify_content_change")
+
+    monitor_instance.previous_content_hash = "same_hash_789"
+
+    mocker.patch.object(monitor_instance, "_fetch_content", return_value="same_html")
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._extract_target_content", return_value="same_content")
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._calculate_hash", return_value="same_hash_789")
+
+    monitor_instance.check_website_for_changes()
+
+    mock_logger.info.assert_any_call("No change detected in content.", current_hash="same_hash_789")
+    mock_notify_method.assert_not_called()  # Ensure notifications were NOT triggered
+    assert monitor_instance.previous_content_hash == "same_hash_789"
+
+
+def test_manage_schedule_initial_peak_and_first_check(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests initial schedule setup during peak hours and the immediate first check."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    mock_schedule_lib = mocker.patch("scraper.website_monitor.schedule")
+    # _get_current_schedule_type is static
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._get_current_schedule_type", return_value="peak")
+    # Mock the method that would be called by the scheduler and potentially by manage_schedule itself
+    mock_check_changes_method = mocker.patch.object(monitor_instance, "check_website_for_changes")
+
+    assert monitor_instance.previous_content_hash is None  # Key for triggering initial check
+
+    mock_job_object = MagicMock()
+    # Configure the mock for the chained calls of schedule.every()...
+    (
+        mock_schedule_lib.every(website_monitor.PEAK_INTERVAL_MIN)
+        .to(website_monitor.PEAK_INTERVAL_MAX)
+        .seconds.do.return_value
+    ) = mock_job_object
+
+    monitor_instance.manage_website_check_schedule()
+
+    # Verify the correct schedule was set
+    mock_schedule_lib.every(website_monitor.PEAK_INTERVAL_MIN).to(
+        website_monitor.PEAK_INTERVAL_MAX
+    ).seconds.do.assert_called_once_with(monitor_instance.check_website_for_changes)
+
+    mock_logger.info.assert_any_call(
+        "Scheduled new website check job.",
+        type="peak",
+        min_interval_sec=website_monitor.PEAK_INTERVAL_MIN,
+        max_interval_sec=website_monitor.PEAK_INTERVAL_MAX,
+    )
+    mock_logger.info.assert_any_call(
+        "Performing initial website check immediately after (re)scheduling as no baseline hash exists."
+    )
+    mock_check_changes_method.assert_called_once()  # Assert the direct call
+
+    assert monitor_instance.current_job == mock_job_object
+    assert monitor_instance.current_schedule_type == "peak"
+
+
+def test_manage_schedule_change_to_offpeak(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests schedule transition from peak to off-peak."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    mock_schedule_lib = mocker.patch("scraper.website_monitor.schedule")
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._get_current_schedule_type", return_value="offpeak")
+    mock_check_changes_method = mocker.patch.object(monitor_instance, "check_website_for_changes")
+
+    # Setup initial state as if a peak job was running
+    initial_mock_job = MagicMock()
+    monitor_instance.current_job = initial_mock_job
+    monitor_instance.current_schedule_type = "peak"
+    monitor_instance.previous_content_hash = "some_initial_hash"  # Indicate not the very first run
+
+    new_mock_job_object = MagicMock()
+    (
+        mock_schedule_lib.every(website_monitor.OFFPEAK_INTERVAL_MIN)
+        .to(website_monitor.OFFPEAK_INTERVAL_MAX)
+        .seconds.do.return_value
+    ) = new_mock_job_object
+
+    monitor_instance.manage_website_check_schedule()
+
+    mock_schedule_lib.cancel_job.assert_called_once_with(initial_mock_job)
+    mock_logger.info.assert_any_call("Cancelled previous check schedule.", cancelled_schedule_type="peak")
+
+    mock_schedule_lib.every(website_monitor.OFFPEAK_INTERVAL_MIN).to(
+        website_monitor.OFFPEAK_INTERVAL_MAX
+    ).seconds.do.assert_called_once_with(monitor_instance.check_website_for_changes)
+    mock_logger.info.assert_any_call(
+        "Scheduled new website check job.",
+        type="offpeak",
+        min_interval_sec=website_monitor.OFFPEAK_INTERVAL_MIN,
+        max_interval_sec=website_monitor.OFFPEAK_INTERVAL_MAX,
+    )
+
+    assert monitor_instance.current_job == new_mock_job_object
+    assert monitor_instance.current_schedule_type == "offpeak"
+    mock_check_changes_method.assert_not_called()  # Not called if previous_content_hash exists
+
+
+def test_manage_schedule_no_change_needed(mocker, monitor_instance: website_monitor.WebsiteMonitor):
+    """Tests manage_schedule when no change in schedule type is required."""
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    mock_schedule_lib = mocker.patch("scraper.website_monitor.schedule")
+    mocker.patch("scraper.website_monitor.WebsiteMonitor._get_current_schedule_type", return_value="peak")
+
+    # Setup as if a peak job is already correctly scheduled
+    mock_existing_job = MagicMock()
+    monitor_instance.current_job = mock_existing_job
+    monitor_instance.current_schedule_type = "peak"
+    monitor_instance.previous_content_hash = "some_hash"  # Not first run
+
+    monitor_instance.manage_website_check_schedule()
+
+    mock_schedule_lib.cancel_job.assert_not_called()
+    # Ensure no NEW job scheduling calls like every().to()... were made
+    mock_schedule_lib.every().to().seconds.do.assert_not_called()
+
+    scheduled_new_job_logged = False
+    if mock_logger.info.call_args_list:  # Check if any info logs were made
+        for call_args_tuple in mock_logger.info.call_args_list:
+            # Access positional arguments via .args
+            if call_args_tuple.args and call_args_tuple.args[0] == "Scheduled new website check job.":
+                scheduled_new_job_logged = True
+                break
+    assert not scheduled_new_job_logged
+
+    assert monitor_instance.current_job == mock_existing_job  # Job remains the same
+    assert monitor_instance.current_schedule_type == "peak"  # Schedule type remains
+
+
+def test_website_monitor_init(mocker):
+    """Tests the __init__ method of WebsiteMonitor."""
+    # Patch the static method _create_session_with_retries called by __init__
+    mock_create_session = mocker.patch("scraper.website_monitor.WebsiteMonitor._create_session_with_retries")
+    # For the spec of the returned session instance, use the original requests.Session
+    mock_session_instance = Mock(spec=requests.Session)
+    mock_create_session.return_value = mock_session_instance
+
+    monitor = website_monitor.WebsiteMonitor()
+
+    mock_create_session.assert_called_once()
+    assert monitor.session == mock_session_instance
+    assert monitor.previous_content_hash is None
+    assert monitor.current_job is None
+    assert monitor.current_schedule_type is None
+    # Optionally, assert that the init debug log was made
+    # mocker.patch('scraper.website_monitor.logger').debug.assert_called_with("WebsiteMonitor instance initialized.")
