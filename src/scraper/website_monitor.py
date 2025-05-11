@@ -171,10 +171,14 @@ class WebsiteMonitor:
             return None
         try:
             soup = BeautifulSoup(html_content, "html.parser")
-            target_element = soup.find(id=element_id)
-            if target_element:
-                logger.debug("Target element found.", target_id=element_id)
-                return str(target_element)
+            target_elements = soup.find_all(id=element_id)
+
+            if target_elements:
+                count = len(target_elements)
+                logger.debug(f"{count} target element(s) found.", target_id=element_id, count=count)
+                # Concatenate the string representation of all found elements
+                # Using a newline separator for consistency with the test.
+                return "\n".join(str(element) for element in target_elements)
 
             logger.warning(
                 "Target element not found in HTML content.",

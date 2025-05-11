@@ -98,7 +98,9 @@ def test_extract_target_content_found(mocker):
     content = website_monitor.WebsiteMonitor._extract_target_content(html, website_monitor.TARGET_ELEMENT_ID)
 
     assert content == expected_str
-    mock_logger.debug.assert_any_call("Target element found.", target_id=website_monitor.TARGET_ELEMENT_ID)
+    mock_logger.debug.assert_any_call(
+        "1 target element(s) found.", target_id=website_monitor.TARGET_ELEMENT_ID, count=1
+    )
 
 
 def test_extract_target_content_not_found(mocker):
@@ -410,3 +412,39 @@ def test_website_monitor_init(mocker):
     assert monitor.current_schedule_type is None
     # Optionally, assert that the init debug log was made
     # mocker.patch('scraper.website_monitor.logger').debug.assert_called_with("WebsiteMonitor instance initialized.")
+
+
+def test_extract_target_content_should_combine_multiple_elements(mocker):
+    """
+    Tests that _extract_target_content combines content from all elements
+    if multiple share the same target ID.
+    This test EXPECTS the new behavior (using find_all and concatenating).
+    """
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    test_id = "productList"  # Using the actual TARGET_ELEMENT_ID for this test
+    html_doc_with_multiple = f"""
+    <html><body>
+        <div id="{test_id}">First item content.</div>
+        <p>Some other paragraph.</p>
+        <div id="{test_id}">Second item <b>bold</b> content.</div>
+        <div id="anotherId">Not this one.</div>
+        <div id="{test_id}">Third item.</div>
+    </body></html>
+    """
+
+    # Expected output IF the implementation uses find_all and joins strings
+    # (assuming a newline separator as implemented in the proposed solution)
+    expected_elem1 = f'<div id="{test_id}">First item content.</div>'
+    expected_elem2 = f'<div id="{test_id}">Second item <b>bold</b> content.</div>'
+    expected_elem3 = f'<div id="{test_id}">Third item.</div>'
+    expected_combined_content = "\n".join([expected_elem1, expected_elem2, expected_elem3])
+
+    # This call will use the CURRENT implementation of _extract_target_content
+    # from your scraper.website_monitor module
+    actual_content = website_monitor.WebsiteMonitor._extract_target_content(html_doc_with_multiple, test_id)
+
+    # This assertion will FAIL until _extract_target_content is updated
+    # to use find_all and join the results.
+    assert actual_content == expected_combined_content, (
+        "Test expects combined content of multiple elements. Current implementation likely returns only the first."
+    )
