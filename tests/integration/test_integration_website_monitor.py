@@ -194,3 +194,106 @@ def test_website_monitor_change_detection_with_local_server(
     )
     assert not change_detected_logged_again, "CHANGE DETECTED logged when no change occurred"
     assert monitor.previous_content_hash == updated_expected_hash
+
+
+@pytest.mark.integration
+def test_website_monitor_multiple_elements_detection(
+    mocker,
+    local_http_server_with_state: tuple[str, int, ServerTestState],
+):
+    """
+    Integration test for WebsiteMonitor's change detection when TARGET_ELEMENT_ID
+    refers to multiple elements within a larger container.
+    """
+    server_host, server_port, server_state = local_http_server_with_state
+    local_url = f"{server_host}:{server_port}/testpage"
+
+    MONITORED_ITEM_ID = "productItem"
+
+    mocker.patch("scraper.website_monitor.URL", local_url)
+    mocker.patch("scraper.website_monitor.TARGET_ELEMENT_ID", MONITORED_ITEM_ID)
+
+    mocker.patch("scraper.website_monitor.EMAIL_NOTIFICATIONS_ENABLED", True)
+    mocker.patch("scraper.website_monitor.EMAIL_RECIPIENTS", ["test@example.com"])
+    mocker.patch("scraper.website_monitor.SMTP_HOST", "smtp.example.com")
+    mocker.patch("scraper.website_monitor.SMTP_USER", "user")
+    mocker.patch("scraper.website_monitor.SMTP_PASSWORD", "pass")
+    mocker.patch("scraper.website_monitor.EMAIL_SENDER", "sender")
+
+    mock_logger = mocker.patch("scraper.website_monitor.logger")
+    monitor = website_monitor.WebsiteMonitor()
+    mock_send_email_method = mocker.patch.object(monitor, "_send_email_notification")
+
+    # --- Phase 1: Initial state with two items ---
+    item1_v1 = f'<div id="{MONITORED_ITEM_ID}">Item A Content</div>'
+    item2_v1 = f'<div id="{MONITORED_ITEM_ID}">Item B Content</div>'
+    server_state.html_content = f"{item1_v1}{item2_v1}<p>Other stuff</p>"
+
+    expected_combined_v1 = "\n".join([item1_v1, item2_v1])
+    hash_v1 = monitor._calculate_hash(expected_combined_v1)
+
+    print(f"\n[Test Multiple] Initial check. Server's inner HTML: '{server_state.html_content}'")
+    monitor.check_website_for_changes()
+
+    mock_logger.info.assert_any_call(
+        "Initial content check complete or content re-established.", current_hash=hash_v1, target_id=MONITORED_ITEM_ID
+    )
+    assert monitor.previous_content_hash == hash_v1
+    mock_send_email_method.assert_not_called()
+    mock_logger.reset_mock()
+    mock_send_email_method.reset_mock()
+
+    # --- Phase 2: Content of one item changes ---
+    item1_v2 = f'<div id="{MONITORED_ITEM_ID}">Item A MODIFIED</div>'
+    server_state.html_content = f"{item1_v2}{item2_v1}<p>Other stuff</p>"
+
+    expected_combined_v2 = "\n".join([item1_v2, item2_v1])
+    hash_v2 = monitor._calculate_hash(expected_combined_v2)
+    time.sleep(0.1)
+
+    print(f"[Test Multiple] Check after item content change. Server's inner HTML: '{server_state.html_content}'")
+    monitor.check_website_for_changes()
+
+    mock_logger.info.assert_any_call(
+        "CHANGE DETECTED: Monitored content has updated.",
+        previous_hash=hash_v1,
+        new_hash=hash_v2,
+        page_url=local_url,
+        element_id=MONITORED_ITEM_ID,
+    )
+    assert monitor.previous_content_hash == hash_v2
+    mock_send_email_method.assert_called_once()
+    mock_logger.reset_mock()
+    mock_send_email_method.reset_mock()
+
+    # --- Phase 3: Number of items changes (one item added) ---
+    item3_v1 = f'<div id="{MONITORED_ITEM_ID}">Item C New</div>'
+    server_state.html_content = f"{item1_v2}{item2_v1}{item3_v1}<p>Other stuff</p>"
+
+    expected_combined_v3 = "\n".join([item1_v2, item2_v1, item3_v1])
+    hash_v3 = monitor._calculate_hash(expected_combined_v3)
+    time.sleep(0.1)
+
+    print(f"[Test Multiple] Check after adding an item. Server's inner HTML: '{server_state.html_content}'")
+    monitor.check_website_for_changes()
+
+    mock_logger.info.assert_any_call(
+        "CHANGE DETECTED: Monitored content has updated.",
+        previous_hash=hash_v2,
+        new_hash=hash_v3,
+        page_url=local_url,
+        element_id=MONITORED_ITEM_ID,
+    )
+    assert monitor.previous_content_hash == hash_v3
+    mock_send_email_method.assert_called_once()
+    mock_logger.reset_mock()
+    mock_send_email_method.reset_mock()
+
+    # --- Phase 4: No change (with multiple items) ---
+    time.sleep(0.1)
+    print(f"[Test Multiple] Check with no change. Server's inner HTML: '{server_state.html_content}'")
+    monitor.check_website_for_changes()
+
+    mock_logger.info.assert_any_call("No change detected in content.", current_hash=hash_v3)
+    mock_send_email_method.assert_not_called()
+    assert monitor.previous_content_hash == hash_v3
