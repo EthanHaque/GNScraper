@@ -15,7 +15,7 @@ from scraper import website_monitor
 class ServerTestState:
     """Holds the mutable dynamic state for the test HTTP server."""
 
-    def __init__(self, html_content: str, target_element_id: str):
+    def __init__(self, html_content: str, target_element_id: str) -> None:
         self.html_content = html_content
         self.target_element_id = target_element_id
 
@@ -50,7 +50,7 @@ class ControllableHTTPRequestHandler(BaseHTTPRequestHandler):
             except Exception as e2:
                 print(f"Further error sending 500: {e2}")
 
-    def log_message(self, format: str, *args: Any) -> None:
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: ARG002
         """Suppress HTTP server log messages."""
         return
 
@@ -58,7 +58,9 @@ class ControllableHTTPRequestHandler(BaseHTTPRequestHandler):
 class _StatefulTestHTTPServer(HTTPServer):
     """Custom HTTPServer to hold test state."""
 
-    def __init__(self, server_address: tuple[str, int], RequestHandlerClass: Any, initial_state: ServerTestState):
+    def __init__(
+        self, server_address: tuple[str, int], RequestHandlerClass: Any, initial_state: ServerTestState
+    ) -> None:
         super().__init__(server_address, RequestHandlerClass)
         self.test_state: ServerTestState = initial_state
 
