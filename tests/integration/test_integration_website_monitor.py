@@ -21,10 +21,7 @@ class ServerTestState:
 
 
 class ControllableHTTPRequestHandler(BaseHTTPRequestHandler):
-    """
-    A custom HTTP request handler that serves dynamically controllable HTML content.
-    It accesses state from self.server.test_state.
-    """
+    """A custom HTTP request handler that serves dynamically controllable HTML content."""
 
     def do_GET(self) -> None:
         """Handle GET requests by serving the current HTML content from server state."""
@@ -67,10 +64,7 @@ class _StatefulTestHTTPServer(HTTPServer):
 
 @pytest.fixture(scope="module")
 def local_http_server_with_state() -> Generator[tuple[str, int, ServerTestState], None, None]:
-    """
-    Pytest fixture to start/stop a local HTTP server with controllable state.
-    Yields the server URL, port, and the state object.
-    """
+    """Pytest fixture to start/stop a local HTTP server with controllable state."""
     host = "localhost"
     port = 0
     httpd = None
@@ -112,8 +106,7 @@ def test_website_monitor_change_detection_with_local_server(
 ):
     """
     Integration test for WebsiteMonitor's change detection using a local HTTP server.
-    Ensures that actual email sending is mocked out. SMS is not tested as it's
-    not present in the current version of the monitor.
+    Ensures that actual email sending is mocked out.
     """
     server_host, server_port, server_state = local_http_server_with_state
     local_url = f"{server_host}:{server_port}/testpage"
