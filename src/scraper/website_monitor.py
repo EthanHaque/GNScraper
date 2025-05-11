@@ -382,7 +382,7 @@ class WebsiteMonitor:
         """
         logger.info(
             "Starting Gamers Nexus Garage Sale Monitor.",
-            version="1.5-notifications",
+            version="1.1.1",
             pid=os.getpid(),
             monitoring_url=URL,
             target_element=TARGET_ELEMENT_ID,
