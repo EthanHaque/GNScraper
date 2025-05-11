@@ -30,6 +30,9 @@ log_cli_level = "info"
 testpaths = [
     "tests",
 ]
+markers = [
+    "integration",
+]
 
 
 [tool.mypy]
