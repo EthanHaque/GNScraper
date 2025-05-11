@@ -1,18 +1,4 @@
-"""
-Integration tests for the WebsiteMonitor using a live local HTTP server.
-This version avoids global variables for server state control and mocks
-actual email sending to prevent external side effects during tests.
-It assumes the WebsiteMonitor only has email notification capabilities.
-
-NOTE: To run tests marked with '@pytest.mark.integration', ensure the
-'integration' marker is registered in your pytest configuration file
-(e.g., pyproject.toml or pytest.ini). Example for pyproject.toml:
-
-[tool.pytest.ini_options]
-markers = [
-    "integration: marks tests as integration tests",
-]
-"""
+"""Integration tests for the WebsiteMonitor using a live local HTTP server."""
 
 import socket
 import threading
