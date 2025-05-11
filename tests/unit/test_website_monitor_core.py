@@ -445,6 +445,4 @@ def test_extract_target_content_should_combine_multiple_elements(mocker):
 
     # This assertion will FAIL until _extract_target_content is updated
     # to use find_all and join the results.
-    assert actual_content == expected_combined_content, (
-        "Test expects combined content of multiple elements. Current implementation likely returns only the first."
-    )
+    assert actual_content == expected_combined_content, "Test expects combined content of multiple elements"
