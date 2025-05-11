@@ -4,7 +4,7 @@ version = "0.1.0"
 description = ""
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [ "requests", "beautifulsoup4", "schedule", "urllib3", "structlog" ]
+dependencies = [ "requests", "beautifulsoup4", "schedule", "urllib3", "structlog", "python-dotenv" ]
 
 
 [project.optional-dependencies]
@@ -32,6 +32,7 @@ testpaths = [
 ]
 markers = [
     "integration",
+    "live_email"
 ]
 
 

@@ -33,6 +33,7 @@
             schedule
             urllib3
             structlog
+            python-dotenv
 
             pytest
             pytest-mock

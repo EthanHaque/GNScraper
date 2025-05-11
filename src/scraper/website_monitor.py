@@ -2,24 +2,40 @@
 Monitors a specific webpage for changes in the content of a target HTML element.
 
 This script periodically fetches a webpage, extracts content from a designated
-HTML element, and compares its hash to a previously stored hash. If a change
-is detected, a notification is sent. The checking frequency adjusts based
-on predefined peak and off-peak hours.
+HTML element, and compares its hash to a previously stored hash. If a change is
+detected, a notification is sent.
+
+Required Environment Variables for Notifications:
+-----------------------------------------------
+Email Notifications:
+  EMAIL_NOTIFICATIONS_ENABLED: "true" or "false" (default: "false")
+  SMTP_HOST:                 Hostname of your SMTP server (e.g., "smtp.gmail.com")
+  SMTP_PORT:                 Port for the SMTP server (e.g., 587 for TLS, 465 for SSL)
+  SMTP_USE_TLS:              "true" or "false" (default: "true" if port is 587)
+  SMTP_USER:                 Your SMTP username (often your email address)
+  SMTP_PASSWORD:             Your SMTP password or App Password (recommended for services like Gmail)
+  EMAIL_SENDER:              The "From" email address for notifications
+  EMAIL_RECIPIENTS:          Comma-separated list of recipient email addresses
 """
 
 import datetime
 import hashlib
 import os
+import smtplib
 import time
+from email.mime.text import MIMEText
 from typing import Any
 
 import requests
 import schedule
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from scraper import logging_config
+
+load_dotenv()
 
 URL: str = "https://store.gamersnexus.net/?category=Garage+Sale"
 TARGET_ELEMENT_ID: str = "productList"
@@ -38,6 +54,20 @@ OFFPEAK_INTERVAL_MIN: int = 270
 OFFPEAK_INTERVAL_MAX: int = 330
 
 REQUEST_TIMEOUT: int = 15
+
+EMAIL_NOTIFICATIONS_ENABLED: bool = os.getenv("EMAIL_NOTIFICATIONS_ENABLED", "false").lower() == "true"
+SMTP_HOST: str | None = os.getenv("SMTP_HOST")
+SMTP_PORT_STR: str | None = os.getenv("SMTP_PORT")
+SMTP_PORT: int = int(SMTP_PORT_STR) if SMTP_PORT_STR and SMTP_PORT_STR.isdigit() else 587
+SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "true" if SMTP_PORT == 587 else "false").lower() == "true"
+SMTP_USER: str | None = os.getenv("SMTP_USER")
+SMTP_PASSWORD: str | None = os.getenv("SMTP_PASSWORD")
+EMAIL_SENDER: str | None = os.getenv("EMAIL_SENDER")
+EMAIL_RECIPIENTS_STR: str | None = os.getenv("EMAIL_RECIPIENTS")
+EMAIL_RECIPIENTS: list[str] = (
+    [email.strip() for email in EMAIL_RECIPIENTS_STR.split(",")] if EMAIL_RECIPIENTS_STR else []
+)
+
 
 logging_config.setup_logging()
 logger = logging_config.get_logger(__name__)
@@ -74,10 +104,6 @@ class WebsiteMonitor:
     def _create_session_with_retries() -> requests.Session:
         """
         Create and configure a requests Session with retry capabilities.
-
-        The session is configured with a common User-Agent and a retry strategy
-        for GET requests that encounter specific HTTP status codes or transient
-        network issues.
 
         Returns
         -------
@@ -127,9 +153,6 @@ class WebsiteMonitor:
         """
         Extract the string representation of a target HTML element.
 
-        This method is static as it doesn't depend on instance state, only on
-        its inputs and module constants for logging context.
-
         Parameters
         ----------
         html_content : Optional[str]
@@ -170,8 +193,6 @@ class WebsiteMonitor:
         """
         Calculate the SHA256 hash of the given string content.
 
-        Static method as it's a pure function of its input.
-
         Parameters
         ----------
         content : Optional[str]
@@ -187,9 +208,56 @@ class WebsiteMonitor:
             return "element_not_found_or_empty"
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
+    def _send_email_notification(self, subject: str, body: str, recipients: list[str]) -> None:
+        """
+        Send an email notification.
+
+        Parameters
+        ----------
+        subject : str
+            The subject of the email.
+        body : str
+            The plain text body of the email.
+        recipients : list[str]
+            A list of recipient email addresses.
+        """
+        if not all([SMTP_HOST, SMTP_USER, SMTP_PASSWORD, EMAIL_SENDER, recipients]):
+            logger.warning(
+                "Email notification misconfigured. Skipping email.",
+                details="SMTP_HOST, SMTP_USER, SMTP_PASSWORD, EMAIL_SENDER, or EMAIL_RECIPIENTS not set.",
+            )
+            return
+
+        msg = MIMEText(body)
+        msg["Subject"] = subject
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = ", ".join(recipients)
+
+        try:
+            logger.info("Attempting to send email notification...", to=recipients, subject=subject)
+            if SMTP_PORT == 465 and not SMTP_USE_TLS:
+                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                    server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
+            else:
+                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
+                    if SMTP_USE_TLS:
+                        server.starttls()
+                    server.login(SMTP_USER, SMTP_PASSWORD)
+                    server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
+            logger.info("Email notification sent successfully.", to=recipients)
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error("SMTP authentication failed. Check SMTP_USER/SMTP_PASSWORD.", error=str(e), exc_info=False)
+        except smtplib.SMTPServerDisconnected:
+            logger.error("SMTP server disconnected unexpectedly.", exc_info=True)
+        except smtplib.SMTPException as e:
+            logger.error("Failed to send email notification due to SMTP error.", error=str(e), exc_info=True)
+        except Exception as e:
+            logger.error("An unexpected error occurred while sending email.", error=str(e), exc_info=True)
+
     def _notify_content_change(self, new_hash: str, old_hash: str | None) -> None:
         """
-        Log a notification that the monitored content has changed.
+        Log and send notifications that the monitored content has changed.
 
         Parameters
         ----------
@@ -198,13 +266,32 @@ class WebsiteMonitor:
         old_hash : Optional[str]
             The previous hash of the content.
         """
-        logger.info(
-            "CHANGE DETECTED: Monitored content has updated.",
-            previous_hash=old_hash if old_hash else "N/A (was not found or initial)",
-            new_hash=new_hash,
-            page_url=URL,
-            element_id=TARGET_ELEMENT_ID,
+        log_message = "CHANGE DETECTED: Monitored content has updated."
+        details = {
+            "previous_hash": old_hash if old_hash else "N/A (was not found or initial)",
+            "new_hash": new_hash,
+            "page_url": URL,
+            "element_id": TARGET_ELEMENT_ID,
+        }
+        logger.info(log_message, **details)
+
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+        subject = f"Change Detected on {URL}"
+        body = (
+            f"Alert: Content change detected on page.\n\n"
+            f"URL: {URL}\n"
+            f"Target Element ID: {TARGET_ELEMENT_ID}\n"
+            f"Time of Detection: {timestamp}\n\n"
+            f"Previous Hash: {details['previous_hash']}\n"
+            f"New Hash: {new_hash}\n\n"
+            f"Please check the page for updates."
         )
+
+        if EMAIL_NOTIFICATIONS_ENABLED:
+            if EMAIL_RECIPIENTS:
+                self._send_email_notification(subject, body, EMAIL_RECIPIENTS)
+            else:
+                logger.warning("Email notifications enabled but no recipients configured.")
 
     def check_website_for_changes(self) -> None:
         """
@@ -235,8 +322,6 @@ class WebsiteMonitor:
     def _get_current_schedule_type() -> str:
         """
         Determine if the current local time falls within peak or off-peak hours.
-
-        Static method as it does not depend on instance state.
 
         Returns
         -------
@@ -297,7 +382,7 @@ class WebsiteMonitor:
         """
         logger.info(
             "Starting Gamers Nexus Garage Sale Monitor.",
-            version="1.4-class-based",
+            version="1.5-notifications",
             pid=os.getpid(),
             monitoring_url=URL,
             target_element=TARGET_ELEMENT_ID,
