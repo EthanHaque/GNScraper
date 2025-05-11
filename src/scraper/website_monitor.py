@@ -246,14 +246,14 @@ class WebsiteMonitor:
                     server.login(SMTP_USER, SMTP_PASSWORD)
                     server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
             logger.info("Email notification sent successfully.", to=recipients)
-        except smtplib.SMTPAuthenticationError:
-            logger.exception("SMTP authentication failed. Check SMTP_USER/SMTP_PASSWORD.")
+        except smtplib.SMTPAuthenticationError as e:
+            logger.exception("SMTP authentication failed. Check SMTP_USER/SMTP_PASSWORD.", error=str(e), exc_info=False)
         except smtplib.SMTPServerDisconnected:
-            logger.exception("SMTP server disconnected unexpectedly.")
-        except smtplib.SMTPException:
-            logger.exception("Failed to send email notification due to SMTP error.")
-        except Exception:
-            logger.exception("An unexpected error occurred while sending email.")
+            logger.exception("SMTP server disconnected unexpectedly.", exc_info=True)
+        except smtplib.SMTPException as e:
+            logger.exception("Failed to send email notification due to SMTP error.", error=str(e), exc_info=True)
+        except Exception as e:
+            logger.exception("An unexpected error occurred while sending email.", error=str(e), exc_info=True)
 
     def _notify_content_change(self, new_hash: str, old_hash: str | None) -> None:
         """
@@ -382,7 +382,7 @@ class WebsiteMonitor:
         """
         logger.info(
             "Starting Gamers Nexus Garage Sale Monitor.",
-            version="1.1.1",
+            version="1.5-notifications",
             pid=os.getpid(),
             monitoring_url=URL,
             target_element=TARGET_ELEMENT_ID,
