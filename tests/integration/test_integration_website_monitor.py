@@ -1,4 +1,3 @@
-# tests/integration/test_integration_website_monitor.py
 """
 Integration tests for the WebsiteMonitor using a live local HTTP server.
 This version avoids global variables for server state control and mocks
@@ -18,12 +17,13 @@ markers = [
 import socket
 import threading
 import time
+from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Generator
+from typing import Any
 
 import pytest
 
-from scraper import website_monitor  # The module we are testing
+from scraper import website_monitor
 
 
 class ServerTestState:
@@ -43,7 +43,7 @@ class ControllableHTTPRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         """Handle GET requests by serving the current HTML content from server state."""
         try:
-            current_state: ServerTestState = self.server.test_state  # type: ignore[attr-defined]
+            current_state: ServerTestState = self.server.test_state
 
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
@@ -130,11 +130,9 @@ def test_website_monitor_change_detection_with_local_server(
     server_host, server_port, server_state = local_http_server_with_state
     local_url = f"{server_host}:{server_port}/testpage"
 
-    # Patch constants in the website_monitor module for this test's scope
     mocker.patch("scraper.website_monitor.URL", local_url)
     mocker.patch("scraper.website_monitor.TARGET_ELEMENT_ID", server_state.target_element_id)
 
-    # Patch environment variables for email notifications to be "enabled"
     mocker.patch("scraper.website_monitor.EMAIL_NOTIFICATIONS_ENABLED", True)
     mocker.patch("scraper.website_monitor.EMAIL_RECIPIENTS", ["test@example.com"])
     mocker.patch("scraper.website_monitor.SMTP_HOST", "smtp.example.com")
@@ -142,15 +140,10 @@ def test_website_monitor_change_detection_with_local_server(
     mocker.patch("scraper.website_monitor.SMTP_PASSWORD", "pass")
     mocker.patch("scraper.website_monitor.EMAIL_SENDER", "sender")
 
-    # REMOVED SMS related patching as _send_sms_notification does not exist
-    # in the provided website_monitor.py
-
     mock_logger = mocker.patch("scraper.website_monitor.logger")
     monitor = website_monitor.WebsiteMonitor()
 
-    # Mock the actual email sending method on the instance
     mock_send_email_method = mocker.patch.object(monitor, "_send_email_notification")
-    # REMOVED: mock_send_sms_method as the method doesn't exist
 
     # --- 1. Initial Check ---
     server_state.html_content = "<p>Initial Content V1</p>"
@@ -169,7 +162,6 @@ def test_website_monitor_change_detection_with_local_server(
     )
     assert monitor.previous_content_hash == initial_expected_hash
     mock_send_email_method.assert_not_called()
-    # REMOVED: mock_send_sms_method.assert_not_called()
 
     change_detected_logged = any(
         call_args_tuple.args and "CHANGE DETECTED" in call_args_tuple.args[0]
@@ -179,7 +171,6 @@ def test_website_monitor_change_detection_with_local_server(
 
     mock_logger.reset_mock()
     mock_send_email_method.reset_mock()
-    # REMOVED: mock_send_sms_method.reset_mock()
 
     # --- 2. Content Change and Detection ---
     server_state.html_content = "<span>Updated Content V2!</span>"
@@ -203,11 +194,9 @@ def test_website_monitor_change_detection_with_local_server(
     assert monitor.previous_content_hash == updated_expected_hash
 
     mock_send_email_method.assert_called_once()
-    # REMOVED: mock_send_sms_method.assert_called_once()
 
     mock_logger.reset_mock()
     mock_send_email_method.reset_mock()
-    # REMOVED: mock_send_sms_method.reset_mock()
 
     # --- 3. No Change Check ---
     time.sleep(0.1)
@@ -217,7 +206,6 @@ def test_website_monitor_change_detection_with_local_server(
 
     mock_logger.info.assert_any_call("No change detected in content.", current_hash=updated_expected_hash)
     mock_send_email_method.assert_not_called()
-    # REMOVED: mock_send_sms_method.assert_not_called()
 
     change_detected_logged_again = any(
         call_args_tuple.args and "CHANGE DETECTED" in call_args_tuple.args[0]
