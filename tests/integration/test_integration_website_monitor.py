@@ -1,15 +1,4 @@
-"""
-Integration tests for the WebsiteMonitor using a live local HTTP server.
-
-NOTE: To run tests marked with '@pytest.mark.integration', ensure the
-'integration' marker is registered in your pytest configuration file
-(e.g., pyproject.toml or pytest.ini). Example for pyproject.toml:
-
-[tool.pytest.ini_options]
-markers = [
-    "integration: marks tests as integration tests",
-]
-"""
+"""Integration tests for the WebsiteMonitor using a live local HTTP server."""
 
 import socket
 import threading
