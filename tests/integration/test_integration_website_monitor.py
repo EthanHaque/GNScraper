@@ -11,25 +11,36 @@ import pytest
 
 from scraper import website_monitor
 
-_SERVER_HTML_CONTENT: str = ""
-_TARGET_ELEMENT_ID_FOR_SERVER: str = "testProductList"
+
+class ServerTestState:
+    """Holds the mutable dynamic state for the test HTTP server."""
+
+    def __init__(self, html_content: str, target_element_id: str):
+        self.html_content = html_content
+        self.target_element_id = target_element_id
 
 
 class ControllableHTTPRequestHandler(BaseHTTPRequestHandler):
     """
     A custom HTTP request handler that serves dynamically controllable HTML content.
+    It accesses state from self.server.test_state.
     """
 
     def do_GET(self) -> None:
-        """Handle GET requests by serving the current _SERVER_HTML_CONTENT."""
+        """Handle GET requests by serving the current HTML content from server state."""
         try:
+            current_state: ServerTestState = self.server.test_state
+
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
             self.end_headers()
 
-            body = f"""<html><head><title>Test Page</title></head><body><h1>Test Server</h1><div id="{_TARGET_ELEMENT_ID_FOR_SERVER}">{_SERVER_HTML_CONTENT}</div><p>Some other content</p></body></html>"""
+            body = f"""<html><head><title>Test Page</title></head><body><h1>Test Server</h1><div id="{current_state.target_element_id}">{current_state.html_content}</div><p>Some other content</p></body></html>"""
 
             self.wfile.write(body.encode("utf-8"))
+        except AttributeError:
+            print("CRITICAL: self.server.test_state not found in ControllableHTTPRequestHandler.")
+            self.send_error(500, "Server configuration error: test_state missing.")
         except Exception as e:
             print(f"Error in ControllableHTTPRequestHandler: {e}")
             try:
@@ -44,15 +55,27 @@ class ControllableHTTPRequestHandler(BaseHTTPRequestHandler):
         return
 
 
+class _StatefulTestHTTPServer(HTTPServer):
+    """Custom HTTPServer to hold test state."""
+
+    def __init__(self, server_address: tuple[str, int], RequestHandlerClass: Any, initial_state: ServerTestState):
+        super().__init__(server_address, RequestHandlerClass)
+        self.test_state: ServerTestState = initial_state
+
+
 @pytest.fixture(scope="module")
-def local_http_server() -> Generator[tuple[str, int], None, None]:
+def local_http_server_with_state() -> Generator[tuple[str, int, ServerTestState], None, None]:
     """
-    Pytest fixture to start and stop a local HTTP server for integration tests.
+    Pytest fixture to start/stop a local HTTP server with controllable state.
+    Yields the server URL, port, and the state object.
     """
     host = "localhost"
     port = 0
     httpd = None
     server_thread = None
+
+    initial_target_id = "testProductList"
+    server_state = ServerTestState(html_content="", target_element_id=initial_target_id)
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -60,7 +83,7 @@ def local_http_server() -> Generator[tuple[str, int], None, None]:
             port = s.getsockname()[1]
 
         server_address = (host, port)
-        httpd = HTTPServer(server_address, ControllableHTTPRequestHandler)
+        httpd = _StatefulTestHTTPServer(server_address, ControllableHTTPRequestHandler, initial_state=server_state)
 
         server_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         server_thread.start()
@@ -68,7 +91,7 @@ def local_http_server() -> Generator[tuple[str, int], None, None]:
         time.sleep(0.05)
 
         print(f"Local HTTP server started on {host}:{port} for module tests...")
-        yield f"http://{host}", port
+        yield f"http://{host}", port, server_state
 
     finally:
         if httpd:
@@ -81,32 +104,37 @@ def local_http_server() -> Generator[tuple[str, int], None, None]:
 
 
 @pytest.mark.integration
-def test_website_monitor_change_detection_with_local_server(mocker, local_http_server: tuple[str, int]):
+def test_website_monitor_change_detection_with_local_server(
+    mocker,
+    local_http_server_with_state: tuple[str, int, ServerTestState],
+):
     """
     Integration test for WebsiteMonitor's change detection using a local HTTP server.
     """
-    global _SERVER_HTML_CONTENT
-
-    server_host, server_port = local_http_server
+    server_host, server_port, server_state = local_http_server_with_state
     local_url = f"{server_host}:{server_port}/testpage"
 
     mocker.patch("scraper.website_monitor.URL", local_url)
-    mocker.patch("scraper.website_monitor.TARGET_ELEMENT_ID", _TARGET_ELEMENT_ID_FOR_SERVER)
+    mocker.patch("scraper.website_monitor.TARGET_ELEMENT_ID", server_state.target_element_id)
 
     mock_logger = mocker.patch("scraper.website_monitor.logger")
     monitor = website_monitor.WebsiteMonitor()
 
-    _SERVER_HTML_CONTENT = "<p>Initial Content V1</p>"
-    initial_target_html_as_expected_by_test = f'<div id="{_TARGET_ELEMENT_ID_FOR_SERVER}">{_SERVER_HTML_CONTENT}</div>'
+    # --- 1. Initial Check ---
+    server_state.html_content = "<p>Initial Content V1</p>"
+
+    initial_target_html_as_expected_by_test = (
+        f'<div id="{server_state.target_element_id}">{server_state.html_content}</div>'
+    )
     initial_expected_hash = monitor._calculate_hash(initial_target_html_as_expected_by_test)
 
-    print(f"\n[Test] Performing initial check. Server content: '{_SERVER_HTML_CONTENT}'")
+    print(f"\n[Test] Performing initial check. Server content: '{server_state.html_content}'")
     monitor.check_website_for_changes()
 
     mock_logger.info.assert_any_call(
         "Initial content check complete or content re-established.",
         current_hash=initial_expected_hash,
-        target_id=_TARGET_ELEMENT_ID_FOR_SERVER,
+        target_id=server_state.target_element_id,
     )
     assert monitor.previous_content_hash == initial_expected_hash
 
@@ -118,13 +146,16 @@ def test_website_monitor_change_detection_with_local_server(mocker, local_http_s
 
     mock_logger.reset_mock()
 
-    _SERVER_HTML_CONTENT = "<span>Updated Content V2!</span>"
-    updated_target_html_as_expected_by_test = f'<div id="{_TARGET_ELEMENT_ID_FOR_SERVER}">{_SERVER_HTML_CONTENT}</div>'
+    # --- 2. Content Change and Detection ---
+    server_state.html_content = "<span>Updated Content V2!</span>"
+    updated_target_html_as_expected_by_test = (
+        f'<div id="{server_state.target_element_id}">{server_state.html_content}</div>'
+    )
     updated_expected_hash = monitor._calculate_hash(updated_target_html_as_expected_by_test)
 
     time.sleep(0.1)
 
-    print(f"[Test] Performing check after content update. Server content: '{_SERVER_HTML_CONTENT}'")
+    print(f"[Test] Performing check after content update. Server content: '{server_state.html_content}'")
     monitor.check_website_for_changes()
 
     mock_logger.info.assert_any_call(
@@ -132,15 +163,16 @@ def test_website_monitor_change_detection_with_local_server(mocker, local_http_s
         previous_hash=initial_expected_hash,
         new_hash=updated_expected_hash,
         page_url=local_url,
-        element_id=_TARGET_ELEMENT_ID_FOR_SERVER,
+        element_id=server_state.target_element_id,
     )
     assert monitor.previous_content_hash == updated_expected_hash
 
     mock_logger.reset_mock()
 
+    # --- 3. No Change Check ---
     time.sleep(0.1)
 
-    print(f"[Test] Performing check with no content change. Server content: '{_SERVER_HTML_CONTENT}'")
+    print(f"[Test] Performing check with no content change. Server content: '{server_state.html_content}'")
     monitor.check_website_for_changes()
 
     mock_logger.info.assert_any_call("No change detected in content.", current_hash=updated_expected_hash)
