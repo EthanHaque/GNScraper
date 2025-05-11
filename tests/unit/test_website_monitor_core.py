@@ -135,7 +135,7 @@ def test_calculate_hash():
 
 
 @pytest.mark.parametrize(
-    "current_time_tuple, expected_type",
+    ("current_time_tuple", "expected_type"),
     [
         ((10, 0, 0), "peak"),
         ((3, 0, 0), "offpeak"),
@@ -221,7 +221,6 @@ def test_check_website_initial_run(mocker, monitor_instance: website_monitor.Web
 
 def test_check_website_change_detected(mocker, monitor_instance: website_monitor.WebsiteMonitor):
     """Tests change detection in check_website_for_changes."""
-    mock_logger = mocker.patch("scraper.website_monitor.logger")
     mock_notify_method = mocker.patch.object(monitor_instance, "_notify_content_change")
 
     monitor_instance.previous_content_hash = "old_hash_000"
@@ -379,7 +378,6 @@ def test_extract_target_content_should_combine_multiple_elements(mocker):
     if multiple share the same target ID.
     This test EXPECTS the new behavior (using find_all and concatenating).
     """
-    mock_logger = mocker.patch("scraper.website_monitor.logger")
     test_id = "productList"
     html_doc_with_multiple = f"""
     <html><body>
