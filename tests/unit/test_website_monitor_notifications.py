@@ -24,7 +24,7 @@ def monitor_instance(mocker) -> website_monitor.WebsiteMonitor:
 
 
 @pytest.mark.parametrize(
-    "smtp_port, use_tls, expect_smtp_ssl",
+    ("smtp_port", "use_tls", "expect_smtp_ssl"),
     [
         (587, True, False),  # Standard TLS port
         (25, True, False),  # Another port, TLS explicitly enabled
@@ -101,7 +101,7 @@ def test_send_email_notification_misconfigured(mocker, monitor_instance: website
 
 
 @pytest.mark.parametrize(
-    "exception_instance, error_message_part",
+    ("exception_instance", "error_message_part"),
     [
         (smtplib.SMTPAuthenticationError(535, b"Authentication credentials invalid"), "SMTP authentication failed"),
         (smtplib.SMTPServerDisconnected("Server disconnected unexpectedly"), "SMTP server disconnected unexpectedly."),
