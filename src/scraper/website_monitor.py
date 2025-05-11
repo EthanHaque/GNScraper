@@ -247,13 +247,13 @@ class WebsiteMonitor:
                     server.sendmail(EMAIL_SENDER, recipients, msg.as_string())
             logger.info("Email notification sent successfully.", to=recipients)
         except smtplib.SMTPAuthenticationError as e:
-            logger.exception("SMTP authentication failed. Check SMTP_USER/SMTP_PASSWORD.", error=str(e), exc_info=False)
+            logger.error("SMTP authentication failed. Check SMTP_USER/SMTP_PASSWORD.", error=str(e), exc_info=False)
         except smtplib.SMTPServerDisconnected:
-            logger.exception("SMTP server disconnected unexpectedly.", exc_info=True)
+            logger.error("SMTP server disconnected unexpectedly.", exc_info=True)
         except smtplib.SMTPException as e:
-            logger.exception("Failed to send email notification due to SMTP error.", error=str(e), exc_info=True)
+            logger.error("Failed to send email notification due to SMTP error.", error=str(e), exc_info=True)
         except Exception as e:
-            logger.exception("An unexpected error occurred while sending email.", error=str(e), exc_info=True)
+            logger.error("An unexpected error occurred while sending email.", error=str(e), exc_info=True)
 
     def _notify_content_change(self, new_hash: str, old_hash: str | None) -> None:
         """
